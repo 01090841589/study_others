@@ -1,21 +1,13 @@
 import tensorflow as tf
 from tensorflow import keras
-
 import numpy as np
 import matplotlib.pyplot as plt
 import random
 
 
-
-fashion_mnist = keras.datasets.fashion_mnist
-
+fashion_mnist = keras.datasets.fashion_mnist 
 (train_images, train_labels), (test_images, test_labels) = fashion_mnist.load_data()
-print(train_labels)
-class_names = ['T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat', 
-               'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot']
-
-print(train_images.shape)
-print(test_images.shape)
+class_names = ['T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot']
 
 train_images = train_images / 255.0
 test_images = test_images / 255.0
@@ -30,9 +22,7 @@ model.compile(optimizer=tf.compat.v1.train.AdamOptimizer(),
               metrics=['accuracy'])
 
 model.fit(train_images, train_labels, epochs=2)
-
 test_loss, test_acc = model.evaluate(test_images, test_labels)
-
 predictions = model.predict(test_images)
 
 ran_test_img = random.sample(list(range(len(test_images))), 10)
