@@ -12,8 +12,6 @@ import matplotlib.pyplot as plt
 import numpy as np
  
  
- 
- 
 # data_list = glob('blood-cells/dataset2-master/images/TRAIN/**/*.jpeg')
 # print(data_list[-1])
  
