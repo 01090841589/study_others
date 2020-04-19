@@ -107,3 +107,135 @@ class TqdmUpTo(tqdm):
         if tsize is not None:
             self.total = tsize
         self.update(b * bsize - self.n)
+
+def maybe_download_and_extract():
+    dest_directory = model_dir
+    ensure_dir_exists(dest_directory)
+    
+    filename = DATA_URL.split("/")[-1]
+    filepath = os.path.join(dest_directory, filename)
+    
+    if not os.path.exists(filepath):
+        
+        print("그래프 파일이 없습니다. 다운로드를 시작합니다.")
+        
+        with TqdmUpTo(unit='B', unit_scale=True, miniters=1, desc=DATA_URL) as t:
+            urllib.request.urlretrieve(DATA_URL, filepath, reporthook=t.update_to, data=None)
+        
+        statinfo = os.stat(filepath)
+        print("다운로드 완료: ", filename, statinfo.st_size, 'bytes.')
+    else:
+        print("그래프 파일이 이미 존재합니다.")
+    tarfile.open(filepath, 'r:gz').extractall(dest_directory)
+
+def create_inception_graph():
+    """
+    저장된 GraphDef 파일에서 그래프를 만들고
+    Graph 오브젝트를 리턴한다.
+    """
+    with tf.Graph().as_default() as graph:
+        model_filename = os.path.join(model_dir, 'classify_image_graph_def.pb')
+    
+        with gfile.FastGFile(model_filename, 'rb') as f:
+            graph_def = tf.GraphDef()
+            graph_def.ParseFromString(f.read())
+            bottleneck_tensor, jpeg_data_tensor, resized_input_tensor = (
+                tf.import_graph_def(graph_def, name='', return_elements=[
+                    BOTTLENECK_TENSOR_NAME, JPEG_DATA_TENSOR_NAME, RESIZED_INPUT_TENSOR_NAME]))
+    return graph, bottleneck_tensor, jpeg_data_tensor, resized_input_tensor
+
+
+
+def should_distort_images(flip_left_right, random_crop, random_scale, random_brightness):
+    """이미지 데이터에 변화를 줄지 결정한다."""
+    return (flip_left_right or (random_crop != 0) or (random_scale != 0) or (random_brightness != 0))
+def ensure_dir_exists(dir_name):
+    if not os.path.exists(dir_name):
+        os.makedirs(dir_name)
+def cache_bottlenecks(sess, image_lists, image_dir, bottleneck_dir, jpeg_data_tensor, bottleneck_tensor):
+    how_many_bottlenecks = 0
+    ensure_dir_exists(bottleneck_dir)
+    for label_name, label_lists in image_lists.items():
+        for category in ['training', 'testing', 'validation']:
+            category_list = label_lists[category]
+            for index, unused_base_name in enumerate(category_list):
+                get_or_create_bottleneck(sess, image_lists, label_name, index, image_dir, category, \
+                                         bottleneck_dir, jpeg_data_tensor, bottleneck_tensor)
+                how_many_bottlenecks += 1
+                if how_many_bottlenecks % 100 == 0:
+                    print('{} bottleneck files created'.format(how_many_bottlenecks))
+def get_or_create_bottleneck(sess, image_lists, label_name, index, image_dir, category, \
+                             bottleneck_dir, jpeg_data_tensor, bottleneck_tensor):
+    label_lists = image_lists[label_name]
+    sub_dir = label_lists['dir']
+    sub_dir_path = os.path.join(bottleneck_dir, sub_dir)
+    ensure_dir_exists(sub_dir_path)
+    bottleneck_path = get_bottleneck_path(image_lists, label_name, index,
+                                    bottleneck_dir, category)
+    if not os.path.exists(bottleneck_path):
+        create_bottleneck_file(bottleneck_path, image_lists, label_name, index,
+                               image_dir, category, sess, jpeg_data_tensor,
+                               bottleneck_tensor)
+    with open(bottleneck_path, 'r') as bottleneck_file:
+        bottleneck_string = bottleneck_file.read()
+    
+    did_hit_error = False
+    try:
+        bottleneck_values = [float(x) for x in bottleneck_string.split(',')]
+    except ValueError:
+        print('Invalid float found, recreating bottleneck')
+        did_hit_error = True
+    if did_hit_error:
+        create_bottleneck_file(bottleneck_path, image_lists, label_name, index,
+                               image_dir, category, sess, jpeg_data_tensor,
+                               bottleneck_tensor)
+        with open(bottleneck_path, 'r') as bottleneck_file:
+            bottleneck_string = bottleneck_file.read()
+        # Allow exceptions to propagate here, since they shouldn't happen after a
+        # fresh creation
+        bottleneck_values = [float(x) for x in bottleneck_string.split(',')]
+    return bottleneck_values
+def get_bottleneck_path(image_lists, label_name, index, bottleneck_dir, category):
+    return get_image_path(image_lists, label_name, index, bottleneck_dir, category) + '.txt'
+def get_image_path(image_lists, label_name, index, image_dir, category):
+    
+    if label_name not in image_lists:
+        tf.logging.fatal('Label does not exist %s.', label_name)
+    label_lists = image_lists[label_name]
+    
+    if category not in label_lists:
+        tf.logging.fatal('Category does not exist %s.', category)
+    category_list = label_lists[category]
+    
+    if not category_list:
+        tf.logging.fatal('Label %s has no images in the category %s.', label_name, category)
+        
+    mod_index = index % len(category_list)
+    base_name = category_list[mod_index]
+    sub_dir = label_lists['dir']
+    full_path = os.path.join(image_dir, sub_dir, base_name)
+    
+    return full_path
+def create_bottleneck_file(bottleneck_path, image_lists, label_name, index, image_dir,
+                          category, sess, jpeg_data_tensor, bottleneck_tensor):
+    print('보틀넥 파일 생성 시작 - {}'.format(bottleneck_path))
+    image_path = get_image_path(image_lists, label_name, index, image_dir, category)
+    
+    if not gfile.Exists(image_path):
+        tf.logging.fata('File does nto exist %s', image_path)
+    image_data = gfile.FastGFile(image_path, 'rb').read()
+    
+    try:
+        bottleneck_values = run_bottleneck_on_image(
+            sess, image_data, jpeg_data_tensor, bottleneck_tensor)
+    except:
+        raise RuntimeError('파일 처리 중 에러 발생: %s' % image_path)
+        
+    bottleneck_string = ','.join(str(x) for x in bottleneck_values)
+    with open(bottleneck_path, 'w') as bottleneck_file:
+        bottleneck_file.write(bottleneck_string)
+def run_bottleneck_on_image(sess, image_data, image_data_tensor, bottleneck_tensor):
+    bottleneck_values = sess.run(
+        bottleneck_tensor, {image_data_tensor: image_data})
+    bottleneck_values = np.squeeze(bottleneck_values)
+    return bottleneck_values
