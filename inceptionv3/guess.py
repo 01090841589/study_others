@@ -38,7 +38,7 @@ def run_inference_on_image():
                                {'DecodeJpeg/contents:0': image_data})
         predictions = np.squeeze(predictions)
 
-        top_k = predictions.argsort()[-10:][::-1]  # 가장 높은 확률을 가진 5개(top 5)의 예측값(predictions)을 얻는다.
+        top_k = predictions.argsort()[-15:][::-1]  # 가장 높은 확률을 가진 5개(top 5)의 예측값(predictions)을 얻는다.
         f = open(labelsFullPath, 'rb')
         lines = f.readlines()
         labels = [str(w).replace("\n", "") for w in lines]
